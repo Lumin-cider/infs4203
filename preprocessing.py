@@ -4,13 +4,10 @@ from sklearn.model_selection import cross_val_score, KFold, GridSearchCV
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from sklearn.neighbors import KNeighborsClassifier, NearestNeighbors
 from sklearn.metrics import f1_score
-import matplotlib.pyplot as plt
 from sklearn.neighbors import LocalOutlierFactor
 import scipy.stats as stats
-from scipy.spatial import distance
 from sklearn.cluster import KMeans, DBSCAN
 from sklearn.ensemble import IsolationForest
-from sklearn.inspection import DecisionBoundaryDisplay
 
 
 def cv(data):
@@ -65,19 +62,21 @@ def normalize(df):
     scaler = MinMaxScaler()
     scaler.fit(df_minmax.loc[:,df_minmax.columns[:103]])
     df_minmax.loc[:,df_minmax.columns[:103]] = scaler.transform(df_minmax.loc[:,df_minmax.columns[:103]])
-    df_minmax.to_csv("df_minmaxscale.csv", index=False)
+    
 
     df_standard = df.copy()
     scaler = StandardScaler()
     scaler.fit(df_standard.loc[:,df_standard.columns[:3]])
     df_standard.loc[:,df_standard.columns[:3]] = scaler.transform(df_standard.loc[:,df_standard.columns[:3]])
-    df_standard.to_csv("df_standardscale.csv", index=False)
+    
+    return df_minmax, df_standard
 
 def densityAnomaly(df):
     x = df.iloc[:,:-1].values
     max_score = 0
     max_con = 0
     max_nei = 0
+    best_df = None
     for contamination in np.arange(0.01, 0.5, 0.01):
         for n_neighbors in np.arange(1, 30, 2):
             # print(f'LOF Anomaly Detection with contamination={contamination:.2f} and k={n_neighbors}')
@@ -90,8 +89,10 @@ def densityAnomaly(df):
                 max_score = score
                 max_con = contamination
                 max_nei = n_neighbors
-    
+                best_df = df_cleaned
+
     print(max_nei, max_con, max_score)
+    return best_df
 
 def modelAnomaly(df):
     X = df.iloc[:,:-3].values
@@ -110,12 +111,14 @@ def modelAnomaly(df):
     df_cleaned = df[~condition_mask]
     df_cleaned.to_csv("result.csv")
     print(cv(df_cleaned))
+    return df_cleaned
 
 def distAnomaly(df):
     X = df.iloc[:,:-1].values
     best = 0
     best_nei = 0
     best_thresh = 0
+    best_df = None
     distance = None
     for thresh in np.arange(20, 95, 5):
         for n_neighbors in np.arange(1,30, 2):
@@ -135,12 +138,15 @@ def distAnomaly(df):
                 best_nei = n_neighbors
                 best_thresh = thresh
                 distance = distance_score
+                best_df = df_cleaned
     print(best, best_nei, best_thresh, distance)
+    return best_df
 
 def kmeancluster(df):
     X = df.iloc[:, :-1].values
     best = 0
     best_thresh = 0
+    best_df = None
     kmeans = KMeans(n_clusters=2, random_state=42)
     kmeans.fit(X)
     cluster_labels_kmeans = kmeans.predict(X)
@@ -167,13 +173,16 @@ def kmeancluster(df):
         if score > best:
             best = score
             best_thresh = threshold
+            best_df = df_cleaned
     print(best, best_thresh)
+    return best_df
 
 def dbscancluster(df):
     X = df.iloc[:, :-1].values
     best = 0
     best_sample = 0
     best_eps = 0
+    best_df = None
     for sample in range(2, 10, 1):
         for epsilon in np.arange(0.5, 10, 0.5):
             dbscan = DBSCAN(eps=epsilon, min_samples = sample)
@@ -186,7 +195,9 @@ def dbscancluster(df):
                 best = score
                 best_eps = epsilon
                 best_sample = sample
+                best_df = df_cleaned
     print(best, best_sample, best_eps)
+    return best_df
 
 def isoforest(df):
     X = df.iloc[:, :-1].values
@@ -201,17 +212,48 @@ def isoforest(df):
     # Apply the mask to the original DataFrame to keep only the inlier rows
     df_cleaned = df[inlier_mask]
     print(cv(df_cleaned))
+    return df_cleaned
+
+
+out_detect = [densityAnomaly, modelAnomaly, distAnomaly, kmeancluster, dbscancluster, isoforest]
+df_all = pd.read_csv("df_impu_all.csv")
+df_class = pd.read_csv("df_impu_class.csv")
+dfs = [];
+
+dbscancluster(df_class)
+
+
+# for df in (df_all, df_class):
+#     minmax, standard = normalize(df)
+#     for method in out_detect:
+#         # outlier detection first
+#         processed = method(df)
+#         # normalization
+#         processed_minmax, processed_standard = normalize(processed)
+#         dfs.append(processed_minmax)
+#         dfs.append(processed_standard)
+
+#         # outlier detection
+#         dfs.append(method(minmax))
+#         dfs.append(method(standard))
+
+# best_df = None
+# best_score = 0;
+
+# for df in dfs:
+#     score = cv(df)
+#     if score > best_score:
+#         best_score = score
+#         best_df = df
+
+# print(best_score)
+# pd.DataFrame(best_df).to_csv("best_df.csv", index=False)
+
+
+    
 
 
 
-
-
-
-
-df = pd.read_csv("df_impu_all.csv")
-isoforest(df)
-# df = pd.read_csv("df_impu_class.csv")
-# kmeancluster(df)
 
 
 
