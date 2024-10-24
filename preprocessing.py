@@ -14,8 +14,6 @@ from sklearn.ensemble import RandomForestClassifier, VotingClassifier, Isolation
 
 
 
-
-
 def cv(df):
     X_train = df.iloc[:,:-1].values
     y_train = df.iloc[:,-1].values
@@ -356,7 +354,7 @@ def main():
     best_accuracy, best_f1_macro, best_classifier = training(processed_df)
     predict(best_classifier)
     with open("s4650048.infs4203", "a") as file:
-            file.write(f"{best_accuracy:.3f},{best_f1_macro:.3f}\n")
+            file.write(f"{best_accuracy:.3f},{best_f1_macro:.3f}")
 
 
 if __name__ == "__main__":
