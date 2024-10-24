@@ -1,44 +1,31 @@
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import cross_val_score, KFold, GridSearchCV
-from sklearn.preprocessing import MinMaxScaler, StandardScaler
-from sklearn.neighbors import KNeighborsClassifier, NearestNeighbors
-from sklearn.metrics import f1_score
-from sklearn.neighbors import LocalOutlierFactor
+from sklearn.model_selection import cross_val_score, GridSearchCV
+from sklearn.preprocessing import MinMaxScaler, StandardScaler, OneHotEncoder
+from sklearn.neighbors import KNeighborsClassifier, NearestNeighbors, LocalOutlierFactor
 import scipy.stats as stats
 from sklearn.cluster import KMeans, DBSCAN
-from sklearn.ensemble import IsolationForest
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.naive_bayes import GaussianNB
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier, VotingClassifier, IsolationForest
 
 
-def cv(data):
-    kf = KFold(n_splits=5, shuffle = True, random_state=0)
-    
-    f1s = []
+def cv(df):
+    X_train = df.iloc[:,:-1].values
+    y_train = df.iloc[:,-1].values
+    kNN_5 = KNeighborsClassifier()
 
-    for train, test in kf.split(data.index):
-        knn = KNeighborsClassifier(n_neighbors=3)
-        train_set = data.iloc[train]
-        test_set = data.iloc[test]
-        knn.fit(train_set.iloc[:, :105], train_set.iloc[:, -1])
+    f1_kNN_5 = cross_val_score(kNN_5, X_train, y_train, cv=5, scoring=('f1_macro'))
+    # print("The cross-validation f1-score is: ", f1_kNN_5.mean())
 
-        pred = knn.predict(test_set.iloc[:, :105])
-        f1 = f1_score(test_set.iloc[:, -1], pred, zero_division=1)
-        f1s.append(f1)
-
-    mean_f1 = np.mean(f1s)
-    std_f1 = np.std(f1s)
-
-    # print("Macro f1:", mean_f1)
-    # print("Standard deviation of f1:", std_f1)
-    # print('----------------------------------------------------------')
-    return mean_f1
+    return f1_kNN_5.mean()
 
 
 def imputation(df):
     df_impu_all = df.copy()
     df_impu_all.iloc[:,:103] = df_impu_all.iloc[:,:103].fillna(df_impu_all.iloc[:,:103].mean())
     df_impu_all.iloc[:,103:] = df_impu_all.iloc[:,103:].fillna(df_impu_all.iloc[:,103:].mode().iloc[0])
-    df_impu_all.to_csv("df_impu_all.csv", index=False)
 
     df_impu_class = df.copy()
     cat_list = df_impu_class.iloc[:,-1].unique()
@@ -53,8 +40,8 @@ def imputation(df):
         df_impu_class.loc[df_impu_class.iloc[:,-1]==cat,df_impu_class.columns[103:]] = \
             df_impu_class.loc[df_impu_class.iloc[:,-1]==cat,df_impu_class.columns[103:]].\
                 fillna(df_impu_class.loc[df_impu_class.iloc[:,-1]==cat,df_impu_class.columns[103:]].mode().iloc[0])
-
-    df_impu_class.to_csv("df_impu_class.csv", index=False)
+    
+    return df_impu_all, df_impu_class
 
     
 def normalize(df):
@@ -79,19 +66,17 @@ def densityAnomaly(df):
     best_df = None
     for contamination in np.arange(0.01, 0.5, 0.01):
         for n_neighbors in np.arange(1, 30, 2):
-            # print(f'LOF Anomaly Detection with contamination={contamination:.2f} and k={n_neighbors}')
             LOF = LocalOutlierFactor(n_neighbors=n_neighbors, contamination=contamination)
             y_pred_LOF = LOF.fit_predict(x)
             X_scores = -LOF.negative_outlier_factor_ # High LOF: Outliers, Low LOF: Inliers.
             df_cleaned = df[y_pred_LOF == 1]
             score = cv(df_cleaned)
-            if ( score > max_score):
+            if (score > max_score):
                 max_score = score
                 max_con = contamination
                 max_nei = n_neighbors
                 best_df = df_cleaned
-
-    print(max_nei, max_con, max_score)
+    print(max_con, max_nei)
     return best_df
 
 def modelAnomaly(df):
@@ -110,7 +95,6 @@ def modelAnomaly(df):
     condition_mask = np.any(likelihoods < filters, axis=1)
     df_cleaned = df[~condition_mask]
     df_cleaned.to_csv("result.csv")
-    print(cv(df_cleaned))
     return df_cleaned
 
 def distAnomaly(df):
@@ -139,7 +123,6 @@ def distAnomaly(df):
                 best_thresh = thresh
                 distance = distance_score
                 best_df = df_cleaned
-    print(best, best_nei, best_thresh, distance)
     return best_df
 
 def kmeancluster(df):
@@ -174,7 +157,6 @@ def kmeancluster(df):
             best = score
             best_thresh = threshold
             best_df = df_cleaned
-    print(best, best_thresh)
     return best_df
 
 def dbscancluster(df):
@@ -196,7 +178,6 @@ def dbscancluster(df):
                 best_eps = epsilon
                 best_sample = sample
                 best_df = df_cleaned
-    print(best, best_sample, best_eps)
     return best_df
 
 def isoforest(df):
@@ -211,46 +192,139 @@ def isoforest(df):
 
     # Apply the mask to the original DataFrame to keep only the inlier rows
     df_cleaned = df[inlier_mask]
-    print(cv(df_cleaned))
     return df_cleaned
 
+def preprocessing():
+    out_detect = [("densityAnomaly", densityAnomaly), ("modelAnomaly", modelAnomaly), ("distAnomaly", distAnomaly), ("kmeancluster", kmeancluster), ("isoforest", isoforest)]
+    original_df = pd.read_csv("DM_Project_24.csv")
+    df_all, df_class = imputation(original_df)
+    dfs = [];
 
-out_detect = [densityAnomaly, modelAnomaly, distAnomaly, kmeancluster, dbscancluster, isoforest]
-df_all = pd.read_csv("df_impu_all.csv")
-df_class = pd.read_csv("df_impu_class.csv")
-dfs = [];
+    for imp_type, df in (("imp_all", df_all), ("imp_class", df_class)):
+        minmax, standard = normalize(df)
+        print(imp_type)
+        for anom_type, method in out_detect:
+            print(anom_type)
+            # outlier detection first
+            processed = method(df)
+            # normalization
+            processed_minmax, processed_standard = normalize(processed)
+            dfs.append(((imp_type, anom_type, "minmax"), processed_minmax))
+            dfs.append(((imp_type, anom_type, "standard"), processed_standard))
 
-dbscancluster(df_class)
+            # outlier detection
+            dfs.append(((imp_type, "minmax", anom_type),method(minmax)))
+            dfs.append(((imp_type, "standard", anom_type), method(standard)))
 
+    best_df = None
+    best_score = 0
+    best_order = None
 
-# for df in (df_all, df_class):
-#     minmax, standard = normalize(df)
-#     for method in out_detect:
-#         # outlier detection first
-#         processed = method(df)
-#         # normalization
-#         processed_minmax, processed_standard = normalize(processed)
-#         dfs.append(processed_minmax)
-#         dfs.append(processed_standard)
+    for order, df in dfs:
+        score = cv(df)
+        if score > best_score:
+            best_score = score
+            best_df = df
+            best_order = order
 
-#         # outlier detection
-#         dfs.append(method(minmax))
-#         dfs.append(method(standard))
+    # imp class -> minmax -> density Anomaly (contamination = 0.48, n_neighbour = 5) -> 0.934
+    print(best_order, best_score)
+    pd.DataFrame(best_df).to_csv("best_df.csv", index=False)
 
-# best_df = None
-# best_score = 0;
-
-# for df in dfs:
-#     score = cv(df)
-#     if score > best_score:
-#         best_score = score
-#         best_df = df
-
-# print(best_score)
-# pd.DataFrame(best_df).to_csv("best_df.csv", index=False)
-
-
+def knn_train(X_train, y_train):
     
+
+    parameters = [{'n_neighbors': [int(x) for x in np.arange(1, 22, 2)]}]
+    kNN = KNeighborsClassifier()
+    clf_best_kNN = GridSearchCV(kNN, parameters, cv=5, scoring='f1_macro')
+    clf_best_kNN.fit(X_train, y_train)
+    print("knn best parameters: ", clf_best_kNN.best_params_)  
+
+def ohe_transform(df):
+    ohe = OneHotEncoder()
+    feature_array = ohe.fit_transform(df.iloc[:,103:105]).toarray()
+    feature_labels = []
+    for cat in ohe.categories_:
+        feature_labels.extend(cat)
+    
+    features = pd.DataFrame(feature_array, columns = feature_labels)
+    df_new = pd.concat([df.iloc[:,:103],features,df.iloc[:,-1]],axis = 1)
+    
+    return df_new
+
+def tree_train(X_train, y_train):
+    dt = DecisionTreeClassifier(random_state = 0)
+    # Define the hyperparameter grid to search
+    param_grid = {
+        'criterion': ['gini', 'entropy'],  # Split criterion
+        'max_depth': [None, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100],   # Depth of the tree
+    }
+
+    # Initialize GridSearchCV
+    clf_best_dt = GridSearchCV(estimator=dt, param_grid=param_grid, cv=5, scoring='f1_macro')
+    clf_best_dt.fit(X_train, y_train)
+
+    print("Decision Tree best parameters: ", clf_best_dt.best_params_)
+
+def forest_train(X_train, y_train):
+    rf = RandomForestClassifier(random_state=0)
+
+    # Define the hyperparameter grid to search
+    param_grid = {
+        'n_estimators': range(10, 50, 5),  # Number of trees in the forest
+        'criterion': ['gini', 'entropy'],  # Function to measure the quality of a split
+        'max_depth': [None, 10, 20, 30],  # Maximum depth of the tree
+    }
+
+    # Initialize GridSearchCV
+    clf_best_rf = GridSearchCV(estimator=rf, param_grid=param_grid, cv=5, scoring='f1_macro')
+    clf_best_rf.fit(X_train, y_train)
+
+    print("Random Forest best parameters: ", clf_best_rf.best_params_)
+
+def training(df):
+    df = ohe_transform(df)
+    X_train = df.iloc[:,:-1].values
+    y_train = df.iloc[:,-1].values
+    # best n_neighbors = 19 
+    knn_train(X_train, y_train)
+    knn = KNeighborsClassifier(n_neighbors=19)
+    f1_knn = cross_val_score(knn, X_train, y_train, cv=5, scoring=('f1_macro'))
+
+    # 0.935
+    print("KNN has an average f1 of: ", f1_knn.mean())
+
+    gnb = GaussianNB()
+    # 0.923
+    f1_gnb = cross_val_score(gnb, X_train, y_train, cv=5, scoring=('f1_macro'))
+    print("Naive Bayes has an average f1 of: ", f1_gnb.mean())
+
+    # best criterion: gini, best depth: 10
+    tree_train(X_train, y_train)
+    tree = DecisionTreeClassifier(criterion='gini', max_depth=10)
+    #0.890
+    f1_tree = cross_val_score(tree, X_train, y_train, cv=5, scoring=('f1_macro'))
+    print("Decision Tree has an average f1 of: ", f1_tree.mean())
+
+    # best criterion: gini, best depth: None, n_estimator: 25
+    forest_train(X_train, y_train)
+    forest = RandomForestClassifier(criterion='gini', max_depth=None, n_estimators=25)
+    #0.934
+    f1_forest = cross_val_score(forest, X_train, y_train, cv=5, scoring=('f1_macro'))
+    print("Random Forest has an average f1 of: ", f1_forest.mean())
+
+    # Ensemble of top 3 methods
+    voting_clf = VotingClassifier(estimators=[('knn', knn), ('naive', gnb), ('forest', forest)], voting='soft')
+    #0.926
+    f1_voting = cross_val_score(voting_clf, X_train, y_train, cv=5, scoring=('f1_macro'))
+    print("Ensemble has an average f1 of: ", f1_voting.mean())
+
+
+training(pd.read_csv("best_df.csv"))
+
+# preprocessing()
+#implement main()
+
 
 
 
