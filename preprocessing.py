@@ -1,3 +1,5 @@
+import os
+os.environ["OMP_NUM_THREADS"] = "7"
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import cross_val_score, GridSearchCV
@@ -9,6 +11,9 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.naive_bayes import GaussianNB
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier, VotingClassifier, IsolationForest
+
+
+
 
 
 def cv(df):
@@ -76,7 +81,6 @@ def densityAnomaly(df):
                 max_con = contamination
                 max_nei = n_neighbors
                 best_df = df_cleaned
-    print(max_con, max_nei)
     return best_df
 
 def modelAnomaly(df):
@@ -94,7 +98,6 @@ def modelAnomaly(df):
 
     condition_mask = np.any(likelihoods < filters, axis=1)
     df_cleaned = df[~condition_mask]
-    df_cleaned.to_csv("result.csv")
     return df_cleaned
 
 def distAnomaly(df):
@@ -195,16 +198,14 @@ def isoforest(df):
     return df_cleaned
 
 def preprocessing():
-    out_detect = [("densityAnomaly", densityAnomaly), ("modelAnomaly", modelAnomaly), ("distAnomaly", distAnomaly), ("kmeancluster", kmeancluster), ("isoforest", isoforest)]
+    out_detect = [("kmeancluster", kmeancluster), ("densityAnomaly", densityAnomaly), ("modelAnomaly", modelAnomaly), ("distAnomaly", distAnomaly), ("isoforest", isoforest)]
     original_df = pd.read_csv("DM_Project_24.csv")
     df_all, df_class = imputation(original_df)
     dfs = [];
 
     for imp_type, df in (("imp_all", df_all), ("imp_class", df_class)):
         minmax, standard = normalize(df)
-        print(imp_type)
         for anom_type, method in out_detect:
-            print(anom_type)
             # outlier detection first
             processed = method(df)
             # normalization
@@ -229,24 +230,27 @@ def preprocessing():
 
     # imp class -> minmax -> density Anomaly (contamination = 0.48, n_neighbour = 5) -> 0.934
     print(best_order, best_score)
-    pd.DataFrame(best_df).to_csv("best_df.csv", index=False)
+    return best_df
 
 def knn_train(X_train, y_train):
-    
-
     parameters = [{'n_neighbors': [int(x) for x in np.arange(1, 22, 2)]}]
     kNN = KNeighborsClassifier()
     clf_best_kNN = GridSearchCV(kNN, parameters, cv=5, scoring='f1_macro')
     clf_best_kNN.fit(X_train, y_train)
-    print("knn best parameters: ", clf_best_kNN.best_params_)  
+
+    print("knn best parameters: ", clf_best_kNN.best_params_, " with f1-macro score of ", clf_best_kNN.best_score_)
+    return clf_best_kNN.best_score_, clf_best_kNN.best_estimator_
+
 
 def ohe_transform(df):
     ohe = OneHotEncoder()
     feature_array = ohe.fit_transform(df.iloc[:,103:105]).toarray()
-    feature_labels = []
-    for cat in ohe.categories_:
-        feature_labels.extend(cat)
     
+    feature_labels = []
+    for i, categories in zip(range(103, 105), ohe.categories_):
+        for cat in categories:
+            feature_labels.append(f"{df.columns[i]}_{int(cat)}")
+
     features = pd.DataFrame(feature_array, columns = feature_labels)
     df_new = pd.concat([df.iloc[:,:103],features,df.iloc[:,-1]],axis = 1)
     
@@ -264,7 +268,9 @@ def tree_train(X_train, y_train):
     clf_best_dt = GridSearchCV(estimator=dt, param_grid=param_grid, cv=5, scoring='f1_macro')
     clf_best_dt.fit(X_train, y_train)
 
-    print("Decision Tree best parameters: ", clf_best_dt.best_params_)
+    print("Decision Tree best parameters: ", clf_best_dt.best_params_, " with f1-macro score of ", clf_best_dt.best_score_)
+    return clf_best_dt.best_score_, clf_best_dt.best_estimator_
+    
 
 def forest_train(X_train, y_train):
     rf = RandomForestClassifier(random_state=0)
@@ -280,52 +286,81 @@ def forest_train(X_train, y_train):
     clf_best_rf = GridSearchCV(estimator=rf, param_grid=param_grid, cv=5, scoring='f1_macro')
     clf_best_rf.fit(X_train, y_train)
 
-    print("Random Forest best parameters: ", clf_best_rf.best_params_)
+    print("Random Forest best parameters: ", clf_best_rf.best_params_, " with f1-macro score of ", clf_best_rf.best_score_)
+    return clf_best_rf.best_score_, clf_best_rf.best_estimator_
 
 def training(df):
     df = ohe_transform(df)
-    X_train = df.iloc[:,:-1].values
-    y_train = df.iloc[:,-1].values
-    # best n_neighbors = 19 
-    knn_train(X_train, y_train)
-    knn = KNeighborsClassifier(n_neighbors=19)
-    f1_knn = cross_val_score(knn, X_train, y_train, cv=5, scoring=('f1_macro'))
+    X_train = df.iloc[:,:-1]
+    y_train = df.iloc[:,-1]
 
-    # 0.935
-    print("KNN has an average f1 of: ", f1_knn.mean())
+    classifiers = []
+    knn = knn_train(X_train, y_train)
+    classifiers.append(knn)
 
     gnb = GaussianNB()
-    # 0.923
     f1_gnb = cross_val_score(gnb, X_train, y_train, cv=5, scoring=('f1_macro'))
-    print("Naive Bayes has an average f1 of: ", f1_gnb.mean())
+    print("Naive Bayes has an f1-macro score of: ", f1_gnb.mean())
 
-    # best criterion: gini, best depth: 10
-    tree_train(X_train, y_train)
-    tree = DecisionTreeClassifier(criterion='gini', max_depth=10)
-    #0.890
-    f1_tree = cross_val_score(tree, X_train, y_train, cv=5, scoring=('f1_macro'))
-    print("Decision Tree has an average f1 of: ", f1_tree.mean())
+    gnb.fit(X_train, y_train)
+    classifiers.append((f1_gnb.mean(), gnb))
 
-    # best criterion: gini, best depth: None, n_estimator: 25
-    forest_train(X_train, y_train)
-    forest = RandomForestClassifier(criterion='gini', max_depth=None, n_estimators=25)
-    #0.934
-    f1_forest = cross_val_score(forest, X_train, y_train, cv=5, scoring=('f1_macro'))
-    print("Random Forest has an average f1 of: ", f1_forest.mean())
+    tree = tree_train(X_train, y_train)
+    classifiers.append(tree)
 
-    # Ensemble of top 3 methods
-    voting_clf = VotingClassifier(estimators=[('knn', knn), ('naive', gnb), ('forest', forest)], voting='soft')
-    #0.926
+    forest = forest_train(X_train, y_train)
+    classifiers.append(forest)
+
+    knn_vote = KNeighborsClassifier(**(knn[1].get_params()))
+    gnb_vote = GaussianNB()
+    forest_vote = RandomForestClassifier(**(forest[1].get_params()))
+    voting_clf = VotingClassifier(estimators=[('knn', knn_vote), ('naive', gnb_vote), ('forest', forest_vote)], voting='soft')
     f1_voting = cross_val_score(voting_clf, X_train, y_train, cv=5, scoring=('f1_macro'))
-    print("Ensemble has an average f1 of: ", f1_voting.mean())
+    print("Ensemble has an f1-macro score of: ", f1_voting.mean())
+    
+    voting_clf.fit(X_train, y_train)
+    classifiers.append((f1_voting.mean(), voting_clf))
+
+    best_f1_macro, best_classifier = max(classifiers, key=lambda x: x[0])
+    print("Best classifier:", best_classifier)
+    print("Best f1_macro:", best_f1_macro)
+
+    new_best = type(best_classifier)(**(best_classifier.get_params()))
+    accu_calc = cross_val_score(new_best, X_train, y_train, cv=5, scoring=('accuracy'))
+    return accu_calc.mean(), best_f1_macro, best_classifier
+
+def predict(classifier):
+    df = pd.read_csv("DM_Project_24.csv")
+    imp_all, imp_class = imputation(df)
+    scaler = MinMaxScaler()
+    scaler.fit(imp_class.loc[:,imp_class.columns[:103]])
+    
+
+    test = pd.read_csv("test_data(1).csv")
+    test.loc[:,test.columns[:103]] = scaler.transform(test.loc[:,test.columns[:103]])
+
+    test = ohe_transform(test)
+    test = test.iloc[:,:-1]
+    prediction = classifier.predict(test)
+    with open("s4650048.infs4203", "w") as file:
+        for pred in prediction:
+            file.write(f"{pred},\n")
 
 
-training(pd.read_csv("best_df.csv"))
-
-# preprocessing()
-#implement main()
 
 
+
+def main():
+    processed_df = preprocessing()
+    processed_df = processed_df.reset_index(drop=True)
+    best_accuracy, best_f1_macro, best_classifier = training(processed_df)
+    predict(best_classifier)
+    with open("s4650048.infs4203", "a") as file:
+            file.write(f"{best_accuracy:.3f},{best_f1_macro:.3f}\n")
+
+
+if __name__ == "__main__":
+    main()
 
 
 
